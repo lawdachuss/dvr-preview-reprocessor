@@ -1,0 +1,52 @@
+name: Reprocess Previews
+
+on:
+  workflow_dispatch:
+    inputs:
+      batch-size:
+        description: 'Number of recordings to process'
+        required: false
+        default: '5'
+        type: string
+      dry-run:
+        description: 'Scan and log only, no mutations'
+        required: false
+        default: false
+        type: boolean
+      delete-orphans:
+        description: 'Delete recordings that have no upload links'
+        required: false
+        default: true
+        type: boolean
+  schedule:
+    - cron: '0 6 * * 0'
+
+jobs:
+  reprocess:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Run reprocessor
+        run: |
+          ARGS="--batch-size=${{ inputs.batch-size || '5' }}"
+          if [ "${{ inputs.dry-run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          if [ "${{ inputs.delete-orphans }}" = "false" ]; then
+            ARGS="$ARGS --delete-orphans=false"
+          fi
+          go run ./cmd/reprocess/ $ARGS
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_API_KEY: ${{ secrets.SUPABASE_API_KEY }}
+          STREAMTAPE_LOGIN: ${{ secrets.STREAMTAPE_LOGIN }}
+          STREAMTAPE_KEY: ${{ secrets.STREAMTAPE_KEY }}

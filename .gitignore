@@ -1,0 +1,5 @@
+.env
+.env.*
+*.exe
+*.test
+tmp/
