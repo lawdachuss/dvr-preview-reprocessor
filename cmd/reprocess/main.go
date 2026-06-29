@@ -16,7 +16,6 @@ import (
 func main() {
 	batchSize := flag.Int("batch-size", 5, "Number of recordings to process per run")
 	dryRun := flag.Bool("dry-run", false, "Scan and log only, no mutations")
-	deleteOrphans := flag.Bool("delete-orphans", false, "Delete recordings that have no upload_links")
 	minAge := flag.Duration("min-age", 10*time.Minute, "Skip recordings created within this duration (avoids race with active DVR pipeline)")
 	flag.Parse()
 
@@ -30,17 +29,6 @@ func main() {
 	}
 
 	client := db.NewClient(supabaseURL, supabaseKey)
-
-	// Debug: dump raw recordings_with_links
-	debugRecs, err := client.DebugQueryLinks(3)
-	if err != nil {
-		log.Printf("DEBUG: failed to query recordings_with_links: %v", err)
-	} else {
-		for _, r := range debugRecs {
-			log.Printf("DEBUG: Links JSON for %s: %s", r.Filename, string(r.Links))
-		}
-	}
-
 	dl := download.NewManager(streamtapeLogin, streamtapeKey)
 
 	if *dryRun {
@@ -54,50 +42,29 @@ func main() {
 		log.Fatalf("Failed to query recordings: %v", err)
 	}
 
-	log.Printf("Found %d recordings without previews", len(recordings))
+	log.Printf("Found %d recordings without previews (with upload links)", len(recordings))
 
 	for _, rec := range recordings {
 		log.Printf("--- Processing: %s (username: %s, timestamp: %s) ---",
 			rec.Filename, rec.Username, rec.Timestamp)
-		processRecording(client, dl, &rec, *dryRun, *deleteOrphans)
+		processRecording(client, dl, &rec, *dryRun)
 	}
 
 	log.Println("Done.")
 }
 
-func processRecording(client *db.Client, dl *download.Manager, rec *db.Recording, dryRun, deleteOrphans bool) {
-	log.Printf("DEBUG: recording ID=%q Filename=%q", rec.ID, rec.Filename)
-	links, err := client.GetUploadLinks(rec.ID)
-	if err != nil {
-		log.Printf("ERROR: failed to get upload links for %s: %v", rec.Filename, err)
-		return
-	}
-	log.Printf("DEBUG: found %d upload links for ID=%q", len(links), rec.ID)
-
-	if len(links) == 0 {
-		if deleteOrphans {
-			log.Printf("No upload links for %s — deleting orphaned recording", rec.Filename)
-			if !dryRun {
-				_ = client.DeletePreviewImage(rec.Filename)
-				if err := client.DeleteRecording(rec.Filename); err != nil {
-					log.Printf("ERROR: failed to delete recording %s: %v", rec.Filename, err)
-					return
-				}
-				log.Printf("Deleted recording: %s", rec.Filename)
-			}
-		} else {
-			log.Printf("No upload links for %s — skipping", rec.Filename)
-		}
+func processRecording(client *db.Client, dl *download.Manager, rec *db.Recording, dryRun bool) {
+	if len(rec.Links) == 0 {
+		log.Printf("No upload links for %s — skipping", rec.Filename)
 		return
 	}
 
-	linkURLs := make([]string, len(links))
-	for i, link := range links {
-		linkURLs[i] = link.URL
+	linkURLs := make([]string, 0, len(rec.Links))
+	for _, url := range rec.Links {
+		linkURLs = append(linkURLs, url)
 	}
-	log.Printf("Found %d upload link(s) for %s", len(links), rec.Filename)
+	log.Printf("Found %d upload link(s) for %s", len(linkURLs), rec.Filename)
 
-	// Check if preview_images table already has URLs for this recording
 	existing, err := client.GetPreviewImage(rec.Filename)
 	if err != nil {
 		log.Printf("WARNING: failed to check preview_images for %s: %v", rec.Filename, err)
@@ -109,7 +76,7 @@ func processRecording(client *db.Client, dl *download.Manager, rec *db.Recording
 				log.Printf("ERROR: failed to update recording URLs from preview_images: %v", err)
 			}
 		}
-		log.Printf("✓ Copied existing preview URLs for %s", rec.Filename)
+		log.Printf("Copied existing preview URLs for %s", rec.Filename)
 		return
 	}
 
@@ -165,7 +132,7 @@ func processRecording(client *db.Client, dl *download.Manager, rec *db.Recording
 		log.Printf("ERROR: failed to save preview image record: %v", err)
 	}
 
-	log.Printf("✓ Successfully processed %s", rec.Filename)
+	log.Printf("Successfully processed %s", rec.Filename)
 }
 
 func emptyStr(s string) string {
