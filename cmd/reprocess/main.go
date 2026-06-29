@@ -31,7 +31,7 @@ func main() {
 
 	client := db.NewClient(supabaseURL, supabaseKey)
 
-	// Debug: check what recordings_with_links actually contains
+	// Debug: recordings WITHOUT preview_url
 	type RawRec struct {
 		ID         string `json:"id"`
 		Filename   string `json:"filename"`
@@ -39,13 +39,23 @@ func main() {
 		Links      json.RawMessage `json:"links"`
 	}
 	var rawRecs []RawRec
-	err := client.GetRaw("/recordings_with_links?order=timestamp.desc&limit=10", &rawRecs)
+	err := client.GetRaw("/recordings_with_links?or=(preview_url.is.null,preview_url.eq.)&order=timestamp.desc&limit=20", &rawRecs)
 	if err != nil {
 		log.Printf("DEBUG: failed raw query: %v", err)
 	} else {
+		log.Printf("DEBUG: found %d recordings WITHOUT preview_url", len(rawRecs))
 		for _, r := range rawRecs {
-			log.Printf("DEBUG: id=%s filename=%s preview_url=%q links=%s", r.ID, r.Filename, r.PreviewURL, string(r.Links))
+			log.Printf("DEBUG: no-preview: filename=%s links=%s", r.Filename, string(r.Links))
 		}
+	}
+
+	var allRecs []RawRec
+	if err := client.GetRaw("/recordings_with_links?select=id&limit=10000", &allRecs); err == nil {
+		log.Printf("DEBUG: total recordings in recordings_with_links: %d", len(allRecs))
+	}
+	var noPreviewRecs []RawRec
+	if err := client.GetRaw("/recordings_with_links?or=(preview_url.is.null,preview_url.eq.)&select=id&limit=10000", &noPreviewRecs); err == nil {
+		log.Printf("DEBUG: recordings WITHOUT preview_url (incl empty links): %d", len(noPreviewRecs))
 	}
 
 	dl := download.NewManager(streamtapeLogin, streamtapeKey)
