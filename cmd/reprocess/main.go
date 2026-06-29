@@ -55,11 +55,13 @@ func main() {
 }
 
 func processRecording(client *db.Client, dl *download.Manager, rec *db.Recording, dryRun, deleteOrphans bool) {
+	log.Printf("DEBUG: recording ID=%q Filename=%q", rec.ID, rec.Filename)
 	links, err := client.GetUploadLinks(rec.ID)
 	if err != nil {
 		log.Printf("ERROR: failed to get upload links for %s: %v", rec.Filename, err)
 		return
 	}
+	log.Printf("DEBUG: found %d upload links for ID=%q", len(links), rec.ID)
 
 	if len(links) == 0 {
 		if deleteOrphans {
