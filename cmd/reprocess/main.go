@@ -1,10 +1,8 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"log"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +17,9 @@ func main() {
 	batchSize := flag.Int("batch-size", 5, "Number of recordings to process per run")
 	dryRun := flag.Bool("dry-run", false, "Scan and log only, no mutations")
 	minAge := flag.Duration("min-age", 10*time.Minute, "Skip recordings created within this duration (avoids race with active DVR pipeline)")
+	nodeURL := flag.String("node-url", "", "DVR node web URL for downloading files (e.g. https://node.trycloudflare.com)")
+	nodeUsername := flag.String("node-username", "", "Basic auth username for DVR node")
+	nodePassword := flag.String("node-password", "", "Basic auth password for DVR node")
 	flag.Parse()
 
 	supabaseURL := os.Getenv("SUPABASE_URL")
@@ -30,110 +31,73 @@ func main() {
 		log.Fatal("SUPABASE_URL and SUPABASE_API_KEY environment variables required")
 	}
 
+	if *nodeURL == "" {
+		*nodeURL = os.Getenv("DVR_NODE_URL")
+	}
+	if *nodeUsername == "" {
+		*nodeUsername = os.Getenv("DVR_NODE_USERNAME")
+	}
+	if *nodePassword == "" {
+		*nodePassword = os.Getenv("DVR_NODE_PASSWORD")
+	}
+
 	client := db.NewClient(supabaseURL, supabaseKey)
-
-	// Debug: recordings WITHOUT preview_url
-	type RawRec struct {
-		ID         string `json:"id"`
-		Filename   string `json:"filename"`
-		PreviewURL string `json:"preview_url"`
-		Links      json.RawMessage `json:"links"`
-	}
-	var rawRecs []RawRec
-	err := client.GetRaw("/recordings_with_links?or=(preview_url.is.null,preview_url.eq.)&order=timestamp.desc&limit=20", &rawRecs)
-	if err != nil {
-		log.Printf("DEBUG: failed raw query: %v", err)
-	} else {
-		log.Printf("DEBUG: found %d recordings WITHOUT preview_url", len(rawRecs))
-		for _, r := range rawRecs {
-			log.Printf("DEBUG: no-preview: filename=%s links=%s", r.Filename, string(r.Links))
-		}
-	}
-
-	var allRecs []RawRec
-	if err := client.GetRaw("/recordings_with_links?select=id&limit=10000", &allRecs); err == nil {
-		log.Printf("DEBUG: total recordings in recordings_with_links: %d", len(allRecs))
-	}
-	var noPreviewRecs []RawRec
-	if err := client.GetRaw("/recordings_with_links?or=(preview_url.is.null,preview_url.eq.)&select=id&limit=10000", &noPreviewRecs); err == nil {
-		log.Printf("DEBUG: recordings WITHOUT preview_url (incl empty links): %d", len(noPreviewRecs))
-	}
-
-	type UploadLinkRow struct {
-		RecordingID string `json:"recording_id"`
-		Host        string `json:"host"`
-		URL         string `json:"url"`
-	}
-	var allUploadLinks []UploadLinkRow
-	if err := client.GetRaw("/upload_links?select=recording_id,host,url&limit=20&order=uploaded_at.desc", &allUploadLinks); err == nil {
-		log.Printf("DEBUG: upload_links sample: %d rows", len(allUploadLinks))
-		for _, ul := range allUploadLinks {
-			log.Printf("DEBUG: ul: recording_id=%s host=%s url=%s", ul.RecordingID, ul.Host, ul.URL)
-		}
-	}
-	// Count total upload_links
-	var ulCount []UploadLinkRow
-	if err := client.GetRaw("/upload_links?select=recording_id&limit=10000", &ulCount); err == nil {
-		log.Printf("DEBUG: total upload_links rows: %d", len(ulCount))
-	}
-	// Count distinct recording_ids in upload_links
-	var ulDistinctCount []UploadLinkRow
-	if err := client.GetRaw("/upload_links?select=recording_id&limit=10000", &ulDistinctCount); err == nil {
-		seen := map[string]bool{}
-		for _, ul := range ulDistinctCount {
-			seen[ul.RecordingID] = true
-		}
-		log.Printf("DEBUG: distinct recording_ids in upload_links: %d", len(seen))
-	}
-	var recCount []RawRec
-	if err := client.GetRaw("/recordings?select=id&limit=10000", &recCount); err == nil {
-		log.Printf("DEBUG: total recordings in recordings table: %d", len(recCount))
-	}
-
-	// Find recordings with upload links but no preview
-	type RecWithPreview struct {
-		ID         string `json:"id"`
-		Filename   string `json:"filename"`
-		PreviewURL string `json:"preview_url"`
-	}
-	var linksNoPreview []RecWithPreview
-	err = client.GetRaw("/recordings?or=(preview_url.is.null,preview_url.eq.)&select=id,filename,preview_url&limit=10000", &linksNoPreview)
-	if err != nil {
-		log.Printf("DEBUG: failed query: %v", err)
-	} else {
-		// Check which of those have upload links
-		var hasLinks int
-		for _, r := range linksNoPreview {
-			var uls []UploadLinkRow
-			if err := client.GetRaw("/upload_links?recording_id=eq."+url.QueryEscape(r.ID)+"&limit=1", &uls); err == nil && len(uls) > 0 {
-				hasLinks++
-				if hasLinks <= 5 {
-					log.Printf("DEBUG: HAS links but no preview: id=%s filename=%s", r.ID, r.Filename)
-				}
-			}
-		}
-		log.Printf("DEBUG: recordings with upload links but NO preview: %d out of %d", hasLinks, len(linksNoPreview))
-	}
-
 	dl := download.NewManager(streamtapeLogin, streamtapeKey)
+
+	var nodeDL *download.NodeDownloader
+	if *nodeURL != "" {
+		nodeDL = download.NewNodeDownloader(*nodeURL, *nodeUsername, *nodePassword)
+	}
 
 	if *dryRun {
 		log.Println("=== DRY RUN — no changes will be made ===")
 	}
 
 	createdBefore := time.Now().UTC().Add(-*minAge).Format("2006-01-02T15:04:05Z")
-	log.Printf("Querying up to %d recordings without previews (created before %s)...", *batchSize, createdBefore)
+
+	// --- Phase 1: recordings WITH upload links (existing flow) ---
+	log.Printf("Phase 1: Querying up to %d recordings with upload links (created before %s)...", *batchSize, createdBefore)
 	recordings, err := client.QueryRecordingsWithoutPreview(*batchSize, createdBefore)
 	if err != nil {
-		log.Fatalf("Failed to query recordings: %v", err)
+		log.Printf("Phase 1 query failed: %v", err)
+	} else {
+		log.Printf("Phase 1: Found %d recordings with upload links", len(recordings))
+		for _, rec := range recordings {
+			log.Printf("--- Processing (phase 1): %s (username: %s) ---", rec.Filename, rec.Username)
+			processRecording(client, dl, &rec, *dryRun)
+		}
 	}
 
-	log.Printf("Found %d recordings without previews (with upload links)", len(recordings))
+	// --- Phase 2: recordings WITHOUT upload links (download from DVR node) ---
+	if nodeDL == nil {
+		log.Println("Phase 2: Skipped — no DVR node URL configured (set --node-url or DVR_NODE_URL)")
+	} else {
+		log.Printf("Phase 2: Querying up to %d recordings without upload links (created before %s)...", *batchSize, createdBefore)
 
-	for _, rec := range recordings {
-		log.Printf("--- Processing: %s (username: %s, timestamp: %s) ---",
-			rec.Filename, rec.Username, rec.Timestamp)
-		processRecording(client, dl, &rec, *dryRun)
+		// Build file_path map from pipeline_states
+		pipelineStates, err := client.QueryPipelineStates()
+		if err != nil {
+			log.Printf("Phase 2: failed to query pipeline_states: %v", err)
+		} else {
+			pathByFilename := map[string]string{}
+			for _, ps := range pipelineStates {
+				if ps.FilePath != "" && ps.FileSize > 0 {
+					pathByFilename[ps.Filename] = ps.FilePath
+				}
+			}
+			log.Printf("Phase 2: Found %d pipeline_states entries with valid file paths", len(pathByFilename))
+
+			noLinkRecs, err := client.QueryRecordingsWithoutPreviewAny(*batchSize, createdBefore)
+			if err != nil {
+				log.Printf("Phase 2 query failed: %v", err)
+			} else {
+				log.Printf("Phase 2: Found %d recordings without preview (non-zero filesize)", len(noLinkRecs))
+				for _, rec := range noLinkRecs {
+					log.Printf("--- Processing (phase 2): %s (username: %s) ---", rec.Filename, rec.Username)
+					processRecordingFromNode(client, nodeDL, &rec, pathByFilename, *dryRun)
+				}
+			}
+		}
 	}
 
 	log.Println("Done.")
@@ -191,11 +155,65 @@ func processRecording(client *db.Client, dl *download.Manager, rec *db.Recording
 		return
 	}
 
+	generateUploadAndUpdate(client, rec.Filename, videoPath, dryRun)
+}
+
+func processRecordingFromNode(client *db.Client, nodeDL *download.NodeDownloader, rec *db.Recording, pathByFilename map[string]string, dryRun bool) {
+	// Determine file path on the DVR node
+	filePath, ok := pathByFilename[rec.Filename]
+	if !ok {
+		filePath = "D:\\videos\\" + rec.Filename
+	}
+
+	existing, err := client.GetPreviewImage(rec.Filename)
+	if err != nil {
+		log.Printf("WARNING: failed to check preview_images for %s: %v", rec.Filename, err)
+	}
+	if existing != nil && existing.PreviewURL != "" {
+		log.Printf("preview_images already has preview_url for %s — copying to recordings table", rec.Filename)
+		if !dryRun {
+			if err := client.UpdateRecordingPreviewURLs(rec.Filename, existing.ThumbnailURL, existing.SpriteURL, existing.PreviewURL); err != nil {
+				log.Printf("ERROR: failed to update recording URLs from preview_images: %v", err)
+			}
+		}
+		log.Printf("Copied existing preview URLs for %s", rec.Filename)
+		return
+	}
+
+	workDir, err := os.MkdirTemp("", "dvr-reprocess-*")
+	if err != nil {
+		log.Printf("ERROR: failed to create temp dir: %v", err)
+		return
+	}
+	defer os.RemoveAll(workDir)
+
+	videoPath := filepath.Join(workDir, rec.Filename)
+	ext := strings.ToLower(filepath.Ext(videoPath))
+	if ext != ".mp4" && ext != ".mkv" && ext != ".ts" {
+		videoPath += ".mp4"
+	}
+
+	if dryRun {
+		log.Printf("[DRY RUN] Would download from node %s to %s", filePath, videoPath)
+		log.Printf("[DRY RUN] Would generate previews and update DB for %s", rec.Filename)
+		return
+	}
+
+	log.Printf("Downloading from node: %s", filePath)
+	if err := nodeDL.Download(filePath, videoPath); err != nil {
+		log.Printf("ERROR: failed to download %s from node: %v", rec.Filename, err)
+		return
+	}
+
+	generateUploadAndUpdate(client, rec.Filename, videoPath, dryRun)
+}
+
+func generateUploadAndUpdate(client *db.Client, filename, videoPath string, dryRun bool) {
 	log.Printf("Generating previews...")
 	thumbURL, spriteURL, previewURL := preview.GeneratePreviews(videoPath)
 
 	if thumbURL == "" && spriteURL == "" && previewURL == "" {
-		log.Printf("ERROR: all preview generation failed for %s", rec.Filename)
+		log.Printf("ERROR: all preview generation failed for %s", filename)
 		return
 	}
 
@@ -203,12 +221,12 @@ func processRecording(client *db.Client, dl *download.Manager, rec *db.Recording
 	log.Printf("Sprite: %s", emptyStr(spriteURL))
 	log.Printf("Preview: %s", emptyStr(previewURL))
 
-	if err := client.UpdateRecordingPreviewURLs(rec.Filename, thumbURL, spriteURL, previewURL); err != nil {
+	if err := client.UpdateRecordingPreviewURLs(filename, thumbURL, spriteURL, previewURL); err != nil {
 		log.Printf("ERROR: failed to update recording URLs: %v", err)
 	}
 
 	previewImg := &db.PreviewImage{
-		Filename:     rec.Filename,
+		Filename:     filename,
 		ThumbnailURL: thumbURL,
 		SpriteURL:    spriteURL,
 		PreviewURL:   previewURL,
@@ -218,7 +236,7 @@ func processRecording(client *db.Client, dl *download.Manager, rec *db.Recording
 		log.Printf("ERROR: failed to save preview image record: %v", err)
 	}
 
-	log.Printf("Successfully processed %s", rec.Filename)
+	log.Printf("Successfully processed %s", filename)
 }
 
 func emptyStr(s string) string {

@@ -224,3 +224,34 @@ func (c *Client) DeletePreviewImage(filename string) error {
 func (c *Client) DeleteUploadLinksByRecordingID(recordingID string) error {
 	return c.delete(fmt.Sprintf("/upload_links?recording_id=eq.%s", url.QueryEscape(recordingID)))
 }
+
+type PipelineState struct {
+	FileHash     string `json:"file_hash"`
+	FilePath     string `json:"file_path"`
+	Filename     string `json:"filename"`
+	Username     string `json:"username"`
+	FileSize     int64  `json:"file_size"`
+	CurrentStage string `json:"current_stage"`
+	Failed       bool   `json:"failed"`
+	LastError    string `json:"last_error"`
+	Links        string `json:"links"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
+}
+
+func (c *Client) QueryPipelineStates() ([]PipelineState, error) {
+	var states []PipelineState
+	err := c.get("/pipeline_states?select=*&order=created_at.desc", &states)
+	return states, err
+}
+
+func (c *Client) QueryRecordingsWithoutPreviewAny(limit int, createdBefore string) ([]Recording, error) {
+	filter := "or=(preview_url.is.null,preview_url.eq.)"
+	if createdBefore != "" {
+		filter = fmt.Sprintf("or=(preview_url.is.null,preview_url.eq.)&created_at=lt.%s", url.QueryEscape(createdBefore))
+	}
+	path := fmt.Sprintf("/recordings?%s&filesize=gt.0&order=timestamp.desc&limit=%d", filter, limit)
+	var recordings []Recording
+	err := c.get(path, &recordings)
+	return recordings, err
+}
