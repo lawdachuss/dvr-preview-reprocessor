@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"log"
 	"os"
@@ -29,6 +30,24 @@ func main() {
 	}
 
 	client := db.NewClient(supabaseURL, supabaseKey)
+
+	// Debug: check what recordings_with_links actually contains
+	type RawRec struct {
+		ID         string `json:"id"`
+		Filename   string `json:"filename"`
+		PreviewURL string `json:"preview_url"`
+		Links      json.RawMessage `json:"links"`
+	}
+	var rawRecs []RawRec
+	err := client.GetRaw("/recordings_with_links?order=timestamp.desc&limit=5", &rawRecs)
+	if err != nil {
+		log.Printf("DEBUG: failed raw query: %v", err)
+	} else {
+		for _, r := range rawRecs {
+			log.Printf("DEBUG: id=%s filename=%s preview_url=%q links=%s", r.ID, r.Filename, r.PreviewURL, string(r.Links))
+		}
+	}
+
 	dl := download.NewManager(streamtapeLogin, streamtapeKey)
 
 	if *dryRun {

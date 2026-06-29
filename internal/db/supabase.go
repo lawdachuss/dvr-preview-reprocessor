@@ -157,6 +157,10 @@ func (c *Client) QueryRecordingsWithoutPreview(limit int, createdBefore string) 
 	return filtered, nil
 }
 
+func (c *Client) GetRaw(path string, result interface{}) error {
+	return c.get(path, result)
+}
+
 func (c *Client) GetRecording(filename string) (*Recording, error) {
 	var recordings []Recording
 	err := c.get(fmt.Sprintf("/recordings?filename=eq.%s&limit=1", url.QueryEscape(filename)), &recordings)
