@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -84,10 +85,34 @@ func main() {
 		}
 		log.Printf("DEBUG: distinct recording_ids in upload_links: %d", len(seen))
 	}
-	// Also count total recordings table
 	var recCount []RawRec
 	if err := client.GetRaw("/recordings?select=id&limit=10000", &recCount); err == nil {
 		log.Printf("DEBUG: total recordings in recordings table: %d", len(recCount))
+	}
+
+	// Find recordings with upload links but no preview
+	type RecWithPreview struct {
+		ID         string `json:"id"`
+		Filename   string `json:"filename"`
+		PreviewURL string `json:"preview_url"`
+	}
+	var linksNoPreview []RecWithPreview
+	err = client.GetRaw("/recordings?or=(preview_url.is.null,preview_url.eq.)&select=id,filename,preview_url&limit=10000", &linksNoPreview)
+	if err != nil {
+		log.Printf("DEBUG: failed query: %v", err)
+	} else {
+		// Check which of those have upload links
+		var hasLinks int
+		for _, r := range linksNoPreview {
+			var uls []UploadLinkRow
+			if err := client.GetRaw("/upload_links?recording_id=eq."+url.QueryEscape(r.ID)+"&limit=1", &uls); err == nil && len(uls) > 0 {
+				hasLinks++
+				if hasLinks <= 5 {
+					log.Printf("DEBUG: HAS links but no preview: id=%s filename=%s", r.ID, r.Filename)
+				}
+			}
+		}
+		log.Printf("DEBUG: recordings with upload links but NO preview: %d out of %d", hasLinks, len(linksNoPreview))
 	}
 
 	dl := download.NewManager(streamtapeLogin, streamtapeKey)
