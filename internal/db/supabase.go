@@ -135,8 +135,12 @@ func (c *Client) delete(path string) error {
 	return nil
 }
 
-func (c *Client) QueryRecordingsWithoutPreview(limit int) ([]Recording, error) {
+func (c *Client) QueryRecordingsWithoutPreview(limit int, createdBefore string) ([]Recording, error) {
 	path := fmt.Sprintf("/recordings?preview_url=is.null&order=timestamp.desc&limit=%d", limit)
+	if createdBefore != "" {
+		path = fmt.Sprintf("/recordings?preview_url=is.null&created_at=lt.%s&order=timestamp.desc&limit=%d",
+			url.QueryEscape(createdBefore), limit)
+	}
 	var recordings []Recording
 	err := c.get(path, &recordings)
 	return recordings, err
@@ -158,6 +162,18 @@ func (c *Client) GetUploadLinks(recordingID string) ([]UploadLink, error) {
 	var links []UploadLink
 	err := c.get(fmt.Sprintf("/upload_links?recording_id=eq.%s", url.QueryEscape(recordingID)), &links)
 	return links, err
+}
+
+func (c *Client) GetPreviewImage(filename string) (*PreviewImage, error) {
+	var images []PreviewImage
+	err := c.get(fmt.Sprintf("/preview_images?filename=eq.%s&limit=1", url.QueryEscape(filename)), &images)
+	if err != nil {
+		return nil, err
+	}
+	if len(images) == 0 {
+		return nil, nil
+	}
+	return &images[0], nil
 }
 
 func (c *Client) UpdateRecordingPreviewURLs(filename, thumbnailURL, spriteURL, previewURL string) error {

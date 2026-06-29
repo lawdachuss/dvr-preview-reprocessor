@@ -17,6 +17,7 @@ func main() {
 	batchSize := flag.Int("batch-size", 5, "Number of recordings to process per run")
 	dryRun := flag.Bool("dry-run", false, "Scan and log only, no mutations")
 	deleteOrphans := flag.Bool("delete-orphans", true, "Delete recordings that have no upload_links")
+	minAge := flag.Duration("min-age", 10*time.Minute, "Skip recordings created within this duration (avoids race with active DVR pipeline)")
 	flag.Parse()
 
 	supabaseURL := os.Getenv("SUPABASE_URL")
@@ -35,8 +36,9 @@ func main() {
 		log.Println("=== DRY RUN — no changes will be made ===")
 	}
 
-	log.Printf("Querying up to %d recordings without previews...", *batchSize)
-	recordings, err := client.QueryRecordingsWithoutPreview(*batchSize)
+	createdBefore := time.Now().UTC().Add(-*minAge).Format("2006-01-02T15:04:05Z")
+	log.Printf("Querying up to %d recordings without previews (created before %s)...", *batchSize, createdBefore)
+	recordings, err := client.QueryRecordingsWithoutPreview(*batchSize, createdBefore)
 	if err != nil {
 		log.Fatalf("Failed to query recordings: %v", err)
 	}
@@ -81,6 +83,22 @@ func processRecording(client *db.Client, dl *download.Manager, rec *db.Recording
 		linkURLs[i] = link.URL
 	}
 	log.Printf("Found %d upload link(s) for %s", len(links), rec.Filename)
+
+	// Check if preview_images table already has URLs for this recording
+	existing, err := client.GetPreviewImage(rec.Filename)
+	if err != nil {
+		log.Printf("WARNING: failed to check preview_images for %s: %v", rec.Filename, err)
+	}
+	if existing != nil && existing.PreviewURL != "" {
+		log.Printf("preview_images already has preview_url for %s — copying to recordings table", rec.Filename)
+		if !dryRun {
+			if err := client.UpdateRecordingPreviewURLs(rec.Filename, existing.ThumbnailURL, existing.SpriteURL, existing.PreviewURL); err != nil {
+				log.Printf("ERROR: failed to update recording URLs from preview_images: %v", err)
+			}
+		}
+		log.Printf("✓ Copied existing preview URLs for %s", rec.Filename)
+		return
+	}
 
 	workDir, err := os.MkdirTemp("", "dvr-reprocess-*")
 	if err != nil {
