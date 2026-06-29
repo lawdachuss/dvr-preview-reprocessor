@@ -58,6 +58,28 @@ func main() {
 		log.Printf("DEBUG: recordings WITHOUT preview_url (incl empty links): %d", len(noPreviewRecs))
 	}
 
+	type PipelineRec struct {
+		FileHash string `json:"file_hash"`
+		Filename string `json:"filename"`
+		Links    string `json:"links"`
+	}
+	var pipelineStates []PipelineRec
+	if err := client.GetRaw("/pipeline_states?select=filename,links,file_hash&limit=20&order=created_at.desc", &pipelineStates); err == nil {
+		log.Printf("DEBUG: pipeline_states count: %d", len(pipelineStates))
+		for _, p := range pipelineStates {
+			log.Printf("DEBUG: pipeline: filename=%s links=%s", p.Filename, p.Links)
+		}
+	}
+	// Also count total pipeline_states and those with non-empty links
+	var allPS []PipelineRec
+	if err := client.GetRaw("/pipeline_states?select=file_hash&limit=10000", &allPS); err == nil {
+		log.Printf("DEBUG: total pipeline_states: %d", len(allPS))
+	}
+	var psWithLinks []PipelineRec
+	if err := client.GetRaw("/pipeline_states?links=neq.{}&select=file_hash&limit=10000", &psWithLinks); err == nil {
+		log.Printf("DEBUG: pipeline_states with non-empty links: %d", len(psWithLinks))
+	}
+
 	dl := download.NewManager(streamtapeLogin, streamtapeKey)
 
 	if *dryRun {
