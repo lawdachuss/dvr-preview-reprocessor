@@ -13,11 +13,6 @@ on:
         required: false
         default: false
         type: boolean
-      delete-orphans:
-        description: 'Delete recordings that have no upload links'
-        required: false
-        default: true
-        type: boolean
   schedule:
     - cron: '0 6 * * 0'
 
@@ -40,9 +35,6 @@ jobs:
           ARGS="--batch-size=${{ inputs.batch-size || '5' }}"
           if [ "${{ inputs.dry-run }}" = "true" ]; then
             ARGS="$ARGS --dry-run"
-          fi
-          if [ "${{ inputs.delete-orphans }}" = "false" ]; then
-            ARGS="$ARGS --delete-orphans=false"
           fi
           go run ./cmd/reprocess/ $ARGS
         env:
