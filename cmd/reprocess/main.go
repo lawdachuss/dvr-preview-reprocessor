@@ -16,7 +16,7 @@ import (
 func main() {
 	batchSize := flag.Int("batch-size", 5, "Number of recordings to process per run")
 	dryRun := flag.Bool("dry-run", false, "Scan and log only, no mutations")
-	deleteOrphans := flag.Bool("delete-orphans", true, "Delete recordings that have no upload_links")
+	deleteOrphans := flag.Bool("delete-orphans", false, "Delete recordings that have no upload_links")
 	minAge := flag.Duration("min-age", 10*time.Minute, "Skip recordings created within this duration (avoids race with active DVR pipeline)")
 	flag.Parse()
 
@@ -73,7 +73,7 @@ func processRecording(client *db.Client, dl *download.Manager, rec *db.Recording
 				log.Printf("Deleted recording: %s", rec.Filename)
 			}
 		} else {
-			log.Printf("No upload links for %s — skipping (delete-orphans=false)", rec.Filename)
+			log.Printf("No upload links for %s — skipping", rec.Filename)
 		}
 		return
 	}

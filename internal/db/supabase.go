@@ -136,11 +136,11 @@ func (c *Client) delete(path string) error {
 }
 
 func (c *Client) QueryRecordingsWithoutPreview(limit int, createdBefore string) ([]Recording, error) {
-	path := fmt.Sprintf("/recordings?preview_url=is.null&order=timestamp.desc&limit=%d", limit)
+	filter := "or=(preview_url.is.null,preview_url.eq.)"
 	if createdBefore != "" {
-		path = fmt.Sprintf("/recordings?preview_url=is.null&created_at=lt.%s&order=timestamp.desc&limit=%d",
-			url.QueryEscape(createdBefore), limit)
+		filter = fmt.Sprintf("or=(preview_url.is.null,preview_url.eq.)&created_at=lt.%s", url.QueryEscape(createdBefore))
 	}
+	path := fmt.Sprintf("/recordings?%s&order=timestamp.desc&limit=%d", filter, limit)
 	var recordings []Recording
 	err := c.get(path, &recordings)
 	return recordings, err
