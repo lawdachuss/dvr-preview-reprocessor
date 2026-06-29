@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -17,8 +18,7 @@ func main() {
 	batchSize := flag.Int("batch-size", 5, "Number of recordings to process per run")
 	dryRun := flag.Bool("dry-run", false, "Scan and log only, no mutations")
 	minAge := flag.Duration("min-age", 10*time.Minute, "Skip recordings created within this duration (avoids race with active DVR pipeline)")
-	nodeUsername := flag.String("node-username", "", "Basic auth username for DVR nodes")
-	nodePassword := flag.String("node-password", "", "Basic auth password for DVR nodes")
+	localDir := flag.String("local-dir", "", "Local directory with video files (e.g. D:\\videos) — bypasses network download")
 	flag.Parse()
 
 	supabaseURL := os.Getenv("SUPABASE_URL")
@@ -28,13 +28,6 @@ func main() {
 
 	if supabaseURL == "" || supabaseKey == "" {
 		log.Fatal("SUPABASE_URL and SUPABASE_API_KEY environment variables required")
-	}
-
-	if *nodeUsername == "" {
-		*nodeUsername = os.Getenv("DVR_NODE_USERNAME")
-	}
-	if *nodePassword == "" {
-		*nodePassword = os.Getenv("DVR_NODE_PASSWORD")
 	}
 
 	client := db.NewClient(supabaseURL, supabaseKey)
@@ -59,23 +52,16 @@ func main() {
 		}
 	}
 
-	// --- Phase 2: recordings WITHOUT upload links (download from DVR nodes) ---
-	// Auto-discover online nodes from the database and try each one
+	// --- Phase 2: recordings WITHOUT upload links (read from local disk) ---
 	log.Printf("Phase 2: Querying up to %d recordings without upload links (created before %s)...", *batchSize, createdBefore)
 
-	nodes, err := client.QueryOnlineNodes()
-	if err != nil {
-		log.Printf("Phase 2: failed to query online nodes: %v", err)
-	} else if len(nodes) == 0 {
-		log.Println("Phase 2: No online nodes found in database")
-	} else {
-		nodeURLs := make([]string, len(nodes))
-		for i, n := range nodes {
-			nodeURLs[i] = n.WebURL
-		}
-		log.Printf("Phase 2: Found %d online node(s): %v", len(nodes), nodeURLs)
-		nodeDL := download.NewNodeDownloader(nodeURLs, *nodeUsername, *nodePassword)
+	if *localDir == "" {
+		*localDir = os.Getenv("DVR_LOCAL_DIR")
+	}
 
+	if *localDir == "" {
+		log.Println("Phase 2: Skipped — no local directory set (use --local-dir or DVR_LOCAL_DIR env var)")
+	} else {
 		// Build file_path map from pipeline_states
 		pipelineStates, err := client.QueryPipelineStates()
 		if err != nil {
@@ -96,7 +82,7 @@ func main() {
 				log.Printf("Phase 2: Found %d recordings without preview (non-zero filesize)", len(noLinkRecs))
 				for _, rec := range noLinkRecs {
 					log.Printf("--- Processing (phase 2): %s (username: %s) ---", rec.Filename, rec.Username)
-					processRecordingFromNode(client, nodeDL, &rec, pathByFilename, *dryRun)
+					processRecordingLocal(client, *localDir, &rec, pathByFilename, *dryRun)
 				}
 			}
 		}
@@ -160,11 +146,11 @@ func processRecording(client *db.Client, dl *download.Manager, rec *db.Recording
 	generateUploadAndUpdate(client, rec.Filename, videoPath, dryRun)
 }
 
-func processRecordingFromNode(client *db.Client, nodeDL *download.NodeDownloader, rec *db.Recording, pathByFilename map[string]string, dryRun bool) {
-	// Determine file path on the DVR node
+func processRecordingLocal(client *db.Client, localDir string, rec *db.Recording, pathByFilename map[string]string, dryRun bool) {
+	// Determine file path: prefer pipeline_states, fall back to localDir + filename
 	filePath, ok := pathByFilename[rec.Filename]
-	if !ok {
-		filePath = "D:\\videos\\" + rec.Filename
+	if !ok || filePath == "" {
+		filePath = filepath.Join(localDir, rec.Filename)
 	}
 
 	existing, err := client.GetPreviewImage(rec.Filename)
@@ -196,14 +182,29 @@ func processRecordingFromNode(client *db.Client, nodeDL *download.NodeDownloader
 	}
 
 	if dryRun {
-		log.Printf("[DRY RUN] Would download from node %s to %s", filePath, videoPath)
+		log.Printf("[DRY RUN] Would copy %s to %s and generate previews", filePath, videoPath)
 		log.Printf("[DRY RUN] Would generate previews and update DB for %s", rec.Filename)
 		return
 	}
 
-	log.Printf("Downloading from node: %s", filePath)
-	if err := nodeDL.Download(filePath, videoPath); err != nil {
-		log.Printf("ERROR: failed to download %s from node: %v", rec.Filename, err)
+	// Copy the local file to the temp working directory
+	log.Printf("Copying from local: %s", filePath)
+	input, err := os.Open(filePath)
+	if err != nil {
+		log.Printf("ERROR: failed to open %s: %v", filePath, err)
+		return
+	}
+	defer input.Close()
+
+	output, err := os.Create(videoPath)
+	if err != nil {
+		log.Printf("ERROR: failed to create %s: %v", videoPath, err)
+		return
+	}
+	defer output.Close()
+
+	if _, err := io.Copy(output, input); err != nil {
+		log.Printf("ERROR: failed to copy %s: %v", filePath, err)
 		return
 	}
 
