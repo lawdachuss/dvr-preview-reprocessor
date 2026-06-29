@@ -39,7 +39,7 @@ func main() {
 		Links      json.RawMessage `json:"links"`
 	}
 	var rawRecs []RawRec
-	err := client.GetRaw("/recordings_with_links?order=timestamp.desc&limit=5", &rawRecs)
+	err := client.GetRaw("/recordings_with_links?order=timestamp.desc&limit=10", &rawRecs)
 	if err != nil {
 		log.Printf("DEBUG: failed raw query: %v", err)
 	} else {
