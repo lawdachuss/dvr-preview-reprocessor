@@ -26,26 +26,27 @@ func NewClient(baseURL, apiKey string) *Client {
 }
 
 type Recording struct {
-	ID           string   `json:"id,omitempty"`
-	ChannelID    string   `json:"channel_id,omitempty"`
-	Username     string   `json:"username"`
-	Filename     string   `json:"filename"`
-	Timestamp    string   `json:"timestamp"`
-	RoomTitle    string   `json:"room_title,omitempty"`
-	Tags         []string `json:"tags,omitempty"`
-	Viewers      int      `json:"viewers"`
-	Resolution   string   `json:"resolution,omitempty"`
-	Framerate    int      `json:"framerate"`
-	Filesize     int64    `json:"filesize"`
-	Duration     float64  `json:"duration,omitempty"`
-	Gender       string   `json:"gender,omitempty"`
-	ThumbnailURL string   `json:"thumbnail_url,omitempty"`
-	SpriteURL    string   `json:"sprite_url,omitempty"`
-	PreviewURL   string   `json:"preview_url,omitempty"`
-	EmbedURL     string   `json:"embed_url,omitempty"`
-	InstanceID   string   `json:"instance_id,omitempty"`
-	CreatedAt    string   `json:"created_at,omitempty"`
-	UpdatedAt    string   `json:"updated_at,omitempty"`
+	ID           string          `json:"id,omitempty"`
+	ChannelID    string          `json:"channel_id,omitempty"`
+	Username     string          `json:"username"`
+	Filename     string          `json:"filename"`
+	Timestamp    string          `json:"timestamp"`
+	RoomTitle    string          `json:"room_title,omitempty"`
+	Tags         []string        `json:"tags,omitempty"`
+	Viewers      int             `json:"viewers"`
+	Resolution   string          `json:"resolution,omitempty"`
+	Framerate    int             `json:"framerate"`
+	Filesize     int64           `json:"filesize"`
+	Duration     float64         `json:"duration,omitempty"`
+	Gender       string          `json:"gender,omitempty"`
+	ThumbnailURL string          `json:"thumbnail_url,omitempty"`
+	SpriteURL    string          `json:"sprite_url,omitempty"`
+	PreviewURL   string          `json:"preview_url,omitempty"`
+	EmbedURL     string          `json:"embed_url,omitempty"`
+	InstanceID   string          `json:"instance_id,omitempty"`
+	CreatedAt    string          `json:"created_at,omitempty"`
+	UpdatedAt    string          `json:"updated_at,omitempty"`
+	Links        json.RawMessage `json:"links,omitempty"`
 }
 
 type UploadLink struct {
@@ -208,4 +209,11 @@ func (c *Client) DeletePreviewImage(filename string) error {
 
 func (c *Client) DeleteUploadLinksByRecordingID(recordingID string) error {
 	return c.delete(fmt.Sprintf("/upload_links?recording_id=eq.%s", url.QueryEscape(recordingID)))
+}
+
+func (c *Client) DebugQueryLinks(limit int) ([]Recording, error) {
+	path := fmt.Sprintf("/recordings_with_links?select=filename,links&order=created_at.desc&limit=%d", limit)
+	var recordings []Recording
+	err := c.get(path, &recordings)
+	return recordings, err
 }

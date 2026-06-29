@@ -30,6 +30,17 @@ func main() {
 	}
 
 	client := db.NewClient(supabaseURL, supabaseKey)
+
+	// Debug: dump raw recordings_with_links
+	debugRecs, err := client.DebugQueryLinks(3)
+	if err != nil {
+		log.Printf("DEBUG: failed to query recordings_with_links: %v", err)
+	} else {
+		for _, r := range debugRecs {
+			log.Printf("DEBUG: Links JSON for %s: %s", r.Filename, string(r.Links))
+		}
+	}
+
 	dl := download.NewManager(streamtapeLogin, streamtapeKey)
 
 	if *dryRun {
