@@ -17,9 +17,8 @@ func main() {
 	batchSize := flag.Int("batch-size", 5, "Number of recordings to process per run")
 	dryRun := flag.Bool("dry-run", false, "Scan and log only, no mutations")
 	minAge := flag.Duration("min-age", 10*time.Minute, "Skip recordings created within this duration (avoids race with active DVR pipeline)")
-	nodeURL := flag.String("node-url", "", "DVR node web URL for downloading files (e.g. https://node.trycloudflare.com)")
-	nodeUsername := flag.String("node-username", "", "Basic auth username for DVR node")
-	nodePassword := flag.String("node-password", "", "Basic auth password for DVR node")
+	nodeUsername := flag.String("node-username", "", "Basic auth username for DVR nodes")
+	nodePassword := flag.String("node-password", "", "Basic auth password for DVR nodes")
 	flag.Parse()
 
 	supabaseURL := os.Getenv("SUPABASE_URL")
@@ -31,9 +30,6 @@ func main() {
 		log.Fatal("SUPABASE_URL and SUPABASE_API_KEY environment variables required")
 	}
 
-	if *nodeURL == "" {
-		*nodeURL = os.Getenv("DVR_NODE_URL")
-	}
 	if *nodeUsername == "" {
 		*nodeUsername = os.Getenv("DVR_NODE_USERNAME")
 	}
@@ -43,11 +39,6 @@ func main() {
 
 	client := db.NewClient(supabaseURL, supabaseKey)
 	dl := download.NewManager(streamtapeLogin, streamtapeKey)
-
-	var nodeDL *download.NodeDownloader
-	if *nodeURL != "" {
-		nodeDL = download.NewNodeDownloader(*nodeURL, *nodeUsername, *nodePassword)
-	}
 
 	if *dryRun {
 		log.Println("=== DRY RUN — no changes will be made ===")
@@ -68,11 +59,22 @@ func main() {
 		}
 	}
 
-	// --- Phase 2: recordings WITHOUT upload links (download from DVR node) ---
-	if nodeDL == nil {
-		log.Println("Phase 2: Skipped — no DVR node URL configured (set --node-url or DVR_NODE_URL)")
+	// --- Phase 2: recordings WITHOUT upload links (download from DVR nodes) ---
+	// Auto-discover online nodes from the database and try each one
+	log.Printf("Phase 2: Querying up to %d recordings without upload links (created before %s)...", *batchSize, createdBefore)
+
+	nodes, err := client.QueryOnlineNodes()
+	if err != nil {
+		log.Printf("Phase 2: failed to query online nodes: %v", err)
+	} else if len(nodes) == 0 {
+		log.Println("Phase 2: No online nodes found in database")
 	} else {
-		log.Printf("Phase 2: Querying up to %d recordings without upload links (created before %s)...", *batchSize, createdBefore)
+		nodeURLs := make([]string, len(nodes))
+		for i, n := range nodes {
+			nodeURLs[i] = n.WebURL
+		}
+		log.Printf("Phase 2: Found %d online node(s): %v", len(nodes), nodeURLs)
+		nodeDL := download.NewNodeDownloader(nodeURLs, *nodeUsername, *nodePassword)
 
 		// Build file_path map from pipeline_states
 		pipelineStates, err := client.QueryPipelineStates()

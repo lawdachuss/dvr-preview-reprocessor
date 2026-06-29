@@ -255,3 +255,15 @@ func (c *Client) QueryRecordingsWithoutPreviewAny(limit int, createdBefore strin
 	err := c.get(path, &recordings)
 	return recordings, err
 }
+
+type Node struct {
+	NodeID  string `json:"node_id"`
+	WebURL  string `json:"web_url"`
+	Status  string `json:"status"`
+}
+
+func (c *Client) QueryOnlineNodes() ([]Node, error) {
+	var nodes []Node
+	err := c.get("/nodes?select=node_id,web_url,status&status=eq.online", &nodes)
+	return nodes, err
+}
