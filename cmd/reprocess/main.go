@@ -58,26 +58,36 @@ func main() {
 		log.Printf("DEBUG: recordings WITHOUT preview_url (incl empty links): %d", len(noPreviewRecs))
 	}
 
-	type PipelineRec struct {
-		FileHash string `json:"file_hash"`
-		Filename string `json:"filename"`
-		Links    string `json:"links"`
+	type UploadLinkRow struct {
+		RecordingID string `json:"recording_id"`
+		Host        string `json:"host"`
+		URL         string `json:"url"`
 	}
-	var pipelineStates []PipelineRec
-	if err := client.GetRaw("/pipeline_states?select=filename,links,file_hash&limit=20&order=created_at.desc", &pipelineStates); err == nil {
-		log.Printf("DEBUG: pipeline_states count: %d", len(pipelineStates))
-		for _, p := range pipelineStates {
-			log.Printf("DEBUG: pipeline: filename=%s links=%s", p.Filename, p.Links)
+	var allUploadLinks []UploadLinkRow
+	if err := client.GetRaw("/upload_links?select=recording_id,host,url&limit=20&order=uploaded_at.desc", &allUploadLinks); err == nil {
+		log.Printf("DEBUG: upload_links sample: %d rows", len(allUploadLinks))
+		for _, ul := range allUploadLinks {
+			log.Printf("DEBUG: ul: recording_id=%s host=%s url=%s", ul.RecordingID, ul.Host, ul.URL)
 		}
 	}
-	// Also count total pipeline_states and those with non-empty links
-	var allPS []PipelineRec
-	if err := client.GetRaw("/pipeline_states?select=file_hash&limit=10000", &allPS); err == nil {
-		log.Printf("DEBUG: total pipeline_states: %d", len(allPS))
+	// Count total upload_links
+	var ulCount []UploadLinkRow
+	if err := client.GetRaw("/upload_links?select=recording_id&limit=10000", &ulCount); err == nil {
+		log.Printf("DEBUG: total upload_links rows: %d", len(ulCount))
 	}
-	var psWithLinks []PipelineRec
-	if err := client.GetRaw("/pipeline_states?links=neq.{}&select=file_hash&limit=10000", &psWithLinks); err == nil {
-		log.Printf("DEBUG: pipeline_states with non-empty links: %d", len(psWithLinks))
+	// Count distinct recording_ids in upload_links
+	var ulDistinctCount []UploadLinkRow
+	if err := client.GetRaw("/upload_links?select=recording_id&limit=10000", &ulDistinctCount); err == nil {
+		seen := map[string]bool{}
+		for _, ul := range ulDistinctCount {
+			seen[ul.RecordingID] = true
+		}
+		log.Printf("DEBUG: distinct recording_ids in upload_links: %d", len(seen))
+	}
+	// Also count total recordings table
+	var recCount []RawRec
+	if err := client.GetRaw("/recordings?select=id&limit=10000", &recCount); err == nil {
+		log.Printf("DEBUG: total recordings in recordings table: %d", len(recCount))
 	}
 
 	dl := download.NewManager(streamtapeLogin, streamtapeKey)
